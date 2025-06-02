@@ -35,7 +35,7 @@
             text-align: left;
         }
 
-        textarea, input[type="number"] {
+        textarea, input[type="number"], input[type="text"] {
             width: 100%;
             padding: 10px;
             margin: 10px 0;
@@ -81,34 +81,58 @@
             font-size: 14px;
             color: #ccc;
         }
+
+        .radio-group {
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
     <h1>Recomendador de Series</h1>
-
+    
     <div class="container">
         <form method="POST">
+            <label for="user_id">Tu ID de Usuario:</label>
+            <input type="text" name="user_id" id="user_id" placeholder="Ej. 1234" required>
+
             <label for="user_input">Describe qué te apetece ver:</label>
             <textarea name="user_input" id="user_input" placeholder="Escribe una descripción..." required></textarea>
 
             <label for="num_recommendations">¿Cuántas series deseas ver? (1 a 5):</label>
             <input type="number" name="num_recommendations" id="num_recommendations" min="1" max="5" value="3" required>
 
-            <button type="submit">Buscar Series</button>
+            <button type="submit">Buscar Series</button> 
         </form>
+
+        {% if feedback_sent %}
+            <p style="color: lightblue; font-weight: bold; text-align: center;">¡Gracias por tu feedback!</p>
+        {% endif %}
 
         {% if recommendations %}
         <div class="results">
             <h2>Series recomendadas:</h2>
-            {% for serie in recommendations %}
-                <div class="series-card">
-                    <strong>{{ serie.name }}</strong><br>
-                    <span class="score">Puntuación estimada: {{ serie.score }}</span><br>
-                    {% if serie.overview %}
-                        <p>{{ serie.overview }}</p>
-                    {% endif %}
-                </div>
-            {% endfor %}
+            <form method="POST" action="/feedback">
+                <input type="hidden" name="user_id" value="{{ user_id }}">
+                {% for serie in recommendations %}
+                    <div class="series-card">
+                        <strong>{{ serie.name }}</strong><br>
+                        <span class="score">Puntuación estimada: {{ serie.score }}</span><br>
+                        {% if serie.overview %}
+                            <p>{{ serie.overview }}</p>
+                        {% endif %}
+
+                        <div class="radio-group">
+                            <label>
+                                <input type="radio" name="feedback_{{ serie.show_id }}" value="like"> Me gusta 👍
+                            </label>
+                            <label>
+                                <input type="radio" name="feedback_{{ serie.show_id }}" value="dislike"> No me gusta 👎
+                            </label>
+                        </div>
+                    </div>
+                {% endfor %}
+                <button type="submit">Enviar Feedback</button>
+            </form>
         </div>
         {% endif %}
     </div>
