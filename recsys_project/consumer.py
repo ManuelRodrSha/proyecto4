@@ -1,29 +1,76 @@
 from kafka import KafkaConsumer
+from cassandra.cluster import Cluster
+from cassandra.auth import PlainTextAuthProvider
 import json
+from datetime import datetime, timezone
 
-# Configuración
-TOPIC = 'user_feedback'
-BOOTSTRAP_SERVERS = 'localhost:9092'
 
-# Inicializa el consumidor
+# 🔐 Cargar credenciales desde JSON
+with open("recsys_db-token.json", "r") as f:
+    token_data = json.load(f)
+
+client_id = token_data["clientId"]
+client_secret = token_data["secret"]
+
+SECURE_BUNDLE_PATH = "secure-connect-recsys-db.zip"
+
+cloud_config = {
+    'secure_connect_bundle': SECURE_BUNDLE_PATH
+}
+
+auth_provider = PlainTextAuthProvider(client_id, client_secret)
+cluster = Cluster(cloud=cloud_config, auth_provider=auth_provider)
+session = cluster.connect()
+
+# ✅ Crear Keyspace y tablas si no existen
+session.set_keyspace("recsys")
+
+session.execute("""
+CREATE TABLE IF NOT EXISTS user_feedback (
+    user_id TEXT,
+    show_id INT,
+    action TEXT,
+    timestamp TIMESTAMP,
+    PRIMARY KEY (user_id, timestamp)
+);
+""")
+
+# 🛰️ Conectar al topic de Kafka
 consumer = KafkaConsumer(
-    TOPIC,
-    bootstrap_servers=BOOTSTRAP_SERVERS,
+    'user_feedback',
+    bootstrap_servers='localhost:9092',
     value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-    auto_offset_reset='earliest',  # leer desde el principio
+    auto_offset_reset='earliest',
     enable_auto_commit=True,
-    group_id='feedback_group'  # consumer group ID
+    group_id='feedback_group'
 )
 
-print(f"✅ Escuchando el topic '{TOPIC}'... (Ctrl+C para salir)")
+print("🟢 Esperando feedback de Kafka...")
 
-# Escucha indefinidamente
-try:
-    for message in consumer:
-        data = message.value
-        print("📥 Feedback recibido:")
-        print(f"👤 Usuario: {data['user_id']} | 🎬 Show ID: {data['show_id']} | 👍 Acción: {data['action']}")
-except KeyboardInterrupt:
-    print("\n🛑 Interrumpido por el usuario.")
-finally:
-    consumer.close()
+for message in consumer:
+    feedback_data = message.value
+    print(f"📥 Recibido: {feedback_data}")
+
+    # 🗃️ Insertar en Cassandra
+    query = """
+        INSERT INTO user_feedback (user_id, show_id, action, timestamp)
+        VALUES (%s, %s, %s, %s)
+    """
+    if isinstance(feedback_data, list):
+        for item in feedback_data:
+            session.execute(query, (
+                item['user_id'],
+                int(item['show_id']),
+                item['action'],
+                datetime.now(timezone.utc)
+            ))
+    else:
+        session.execute(query, (
+            feedback_data['user_id'],
+            int(feedback_data['show_id']),
+            feedback_data['action'],
+            datetime.now(timezone.utc)
+        ))
+
+
+    print("✅ Guardado en Cassandra.")
