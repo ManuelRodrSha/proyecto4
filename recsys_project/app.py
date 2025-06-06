@@ -1,30 +1,71 @@
-from flask import Flask, render_template, request, redirect, url_for
-import pandas as pd
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer
-import ast
-from kafka import KafkaProducer
+import os
 import json
+import numpy as np
+import pandas as pd
+from flask import Flask, request, render_template, redirect, url_for
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from cassandra.cluster import Cluster
+from cassandra.auth import PlainTextAuthProvider
+import webbrowser
+import threading
+from kafka import KafkaProducer
+import datetime
 
+# --- Flask app ---
 app = Flask(__name__)
 
-# Cargar modelo de embeddings
-model = SentenceTransformer('all-MiniLM-L6-v2')
-
-# Cargar dataset con embeddings
-df = pd.read_csv("dataset_con_embbedings_pruebas.csv")
-df['embeddings_con_genero'] = df['embeddings_con_genero'].apply(lambda x: np.array(ast.literal_eval(x)))
-
-# Inicializa el productor de Kafka
+# --- Kafka Producer ---
 producer = KafkaProducer(
     bootstrap_servers='localhost:9092',
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
 
-KAFKA_TOPIC = 'user_feedback'
+# --- Cargar modelo de embeddings ---
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# --- Configurar conexión con Cassandra ---
+ASTRA_DB_BUNDLE = "secure-connect-proyecto-4.zip"
+TOKEN_JSON = "proyecto_4-token.json"
+
+with open(TOKEN_JSON, "r") as f:
+    token_data = json.load(f)
+
+client_id = token_data["clientId"]
+client_secret = token_data["secret"]
+
+cloud_config = {
+    'secure_connect_bundle': ASTRA_DB_BUNDLE
+}
+auth_provider = PlainTextAuthProvider(client_id, client_secret)
+
+cluster = Cluster(cloud=cloud_config, auth_provider=auth_provider)
+session = cluster.connect("series")
+
+# --- Consultar datos y cargar DataFrame ---
+query = "SELECT show_id, name, overview, genre_name, embeddings_con_genero, vote_count, vote_average FROM stream"
+rows = session.execute(query)
+
+# Convertir a DataFrame
+records = []
+for row in rows:
+    records.append({
+        "show_id": row.show_id,
+        "name": row.name,
+        "overview": row.overview,
+        "genre_name": row.genre_name,
+        "embeddings_con_genero": row.embeddings_con_genero,
+        "vote_count": row.vote_count,
+        "vote_average": row.vote_average
+    })
+
+df = pd.DataFrame(records)
+
+# Asegurarse de que los embeddings están en formato numpy array
+df['embeddings_con_genero'] = df['embeddings_con_genero'].apply(lambda x: np.array(x))
 
 
+# --- Ruta principal ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     recommendations = []
@@ -36,10 +77,8 @@ def index():
         num_recommendations = int(request.form['num_recommendations'])
         user_id = request.form['user_id']
 
-        # Embedding del texto del usuario
         input_embedding = model.encode([user_input])[0].reshape(1, -1)
 
-        # Calcular similitudes
         matrix = np.vstack(df['embeddings_con_genero'].values)
         similarities = cosine_similarity(input_embedding, matrix)[0]
         top_indices = similarities.argsort()[::-1][:num_recommendations]
@@ -51,39 +90,41 @@ def index():
                 "score": round(df.iloc[idx]['vote_average'], 2),
                 "overview": df.iloc[idx]['overview']
             })
-    
-        # En POST, renderizamos sin mostrar "Gracias por tu feedback"
-        return render_template('index.html', recommendations=recommendations, user_id=user_id, feedback_sent=False)   
-    
-    # En GET, cuando se redirige desde /feedback con ?feedback_sent=true
-    return render_template('index.html', recommendations=[], user_id=user_id, feedback_sent=feedback_sent)
+
+    return render_template('index.html', recommendations=recommendations, user_id=user_id, feedback_sent=feedback_sent)
 
 
+# --- Ruta para feedback ---
 @app.route('/feedback', methods=['POST'])
 def feedback():
-    print("✅ Feedback recibido")
     print("➡ Formulario recibido:", request.form)
-    user_id = request.form['user_id']
     feedback_data = []
-
-    for key in request.form:
-        if key.startswith('feedback_'):
-            show_id = key.split('_')[1]
-            action = request.form[key]
+    user_id = request.form['user_id']
+    
+    for key, value in request.form.items():
+        if key.startswith("feedback_"):
+            show_id = key.split("_")[1]
             feedback_data.append({
-                'user_id': user_id,
-                'show_id': show_id,
-                'action': action
+                "user_id": user_id,
+                "show_id": show_id,
+                "action": value,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
             })
 
-    # Mostrar feedbacks recibidos
     for item in feedback_data:
         print(f"[Feedback] Usuario: {item['user_id']} | Show ID: {item['show_id']} | Acción: {item['action']}")
-        # Enviar a Kafka
-        producer.send(KAFKA_TOPIC, item)
-    
-    # Redirigir con un parámetro en la URL
+        producer.send("user_feedback", value=item)
+
     return redirect(url_for('index', feedback_sent='true'))
-    
+
+
+# --- Abrir navegador automáticamente ---
+def open_browser():
+    webbrowser.open_new("http://localhost:5000")
+
+
+# --- Ejecutar app ---
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    threading.Timer(1.25, open_browser).start()
+    app.run(debug=True)
+

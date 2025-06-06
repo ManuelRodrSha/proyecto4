@@ -1,0 +1,38 @@
+# Entornos virtuales
+venv/
+.env/
+*.env
+
+# Archivos de configuración sensibles
+*.json
+!config_example.json
+*.key
+*.pem
+
+# Archivos de conexión de bases de datos
+*token*.json
+*secure-connect*.zip
+
+# Archivos de caché y compilados
+__pycache__/
+*.py[cod]
+*.so
+
+# Archivos de Jupyter notebook temporales
+.ipynb_checkpoints/
+
+# Archivos y carpetas del sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# VS Code settings
+.vscode/
+
+# Bases de datos locales
+*.sqlite3
+*.db
+
+
