@@ -1,76 +1,73 @@
-from kafka import KafkaConsumer
+import os, time, json
+from datetime import datetime, timezone
+from kafka import KafkaConsumer, errors
 from cassandra.cluster import Cluster
 from cassandra.auth import PlainTextAuthProvider
-import json
-from datetime import datetime, timezone
+import time
 
+# Cassandra Astra
+ASTRA_BUNDLE = 'secure-connect-proyecto-4.zip'
+ASTRA_TOKEN  = 'proyecto_4-token.json'
+KEYSPACE     = 'series'
 
-# 🔐 Cargar credenciales desde JSON
-with open("recsys_db-token.json", "r") as f:
-    token_data = json.load(f)
-
-client_id = token_data["clientId"]
-client_secret = token_data["secret"]
-
-SECURE_BUNDLE_PATH = "secure-connect-recsys-db.zip"
-
-cloud_config = {
-    'secure_connect_bundle': SECURE_BUNDLE_PATH
-}
-
-auth_provider = PlainTextAuthProvider(client_id, client_secret)
-cluster = Cluster(cloud=cloud_config, auth_provider=auth_provider)
-session = cluster.connect()
-
-# ✅ Crear Keyspace y tablas si no existen
-session.set_keyspace("recsys")
-
+with open(ASTRA_TOKEN) as f:
+    creds = json.load(f)
+auth = PlainTextAuthProvider(creds['clientId'], creds['secret'])
+cluster = Cluster(cloud={'secure_connect_bundle': ASTRA_BUNDLE}, auth_provider=auth)
+session = cluster.connect(KEYSPACE)
 session.execute("""
 CREATE TABLE IF NOT EXISTS user_feedback (
-    user_id TEXT,
-    show_id INT,
-    action TEXT,
-    timestamp TIMESTAMP,
+    user_id TEXT, show_id TEXT, action TEXT, timestamp TIMESTAMP,
     PRIMARY KEY (user_id, timestamp)
-);
+) WITH CLUSTERING ORDER BY (timestamp DESC);
 """)
 
-# 🛰️ Conectar al topic de Kafka
-consumer = KafkaConsumer(
-    'user_feedback',
-    bootstrap_servers='localhost:9092',
-    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-    auto_offset_reset='earliest',
-    enable_auto_commit=True,
-    group_id='feedback_group'
-)
 
-print("🟢 Esperando feedback de Kafka...")
+def make_consumer(topic, delay=5):
+    bootstrap = os.environ.get('KAFKA_BOOTSTRAP_SERVERS','kafka:9092').split(',')
+    while True:
+        try:
+            group = f'feedback_group_{int(time.time())}'
+            c = KafkaConsumer(
+                topic,
+                bootstrap_servers=bootstrap,
+                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+                auto_offset_reset='earliest',
+                enable_auto_commit=True,
+                group_id=group
+            )
+            print(f"✅ KafkaConsumer conectado al grupo '{group}' y bootstrap {bootstrap}", flush=True)
+            return c
+        except errors.NoBrokersAvailable as e:
+            print(f"⚠️ Kafka no disponible en {bootstrap}. Reintentando en {delay}s…", flush=True)
+            time.sleep(delay)
 
-for message in consumer:
-    feedback_data = message.value
-    print(f"📥 Recibido: {feedback_data}")
 
-    # 🗃️ Insertar en Cassandra
-    query = """
-        INSERT INTO user_feedback (user_id, show_id, action, timestamp)
-        VALUES (%s, %s, %s, %s)
-    """
-    if isinstance(feedback_data, list):
-        for item in feedback_data:
-            session.execute(query, (
-                item['user_id'],
-                int(item['show_id']),
-                item['action'],
-                datetime.now(timezone.utc)
+consumer = make_consumer('user_feedback')
+print("🟢 Esperando mensajes de feedback…", flush=True)
+
+insert_cql = """
+INSERT INTO user_feedback (user_id, show_id, action, timestamp)
+VALUES (%s, %s, %s, %s)
+"""
+
+try:
+    for msg in consumer:
+        data = msg.value
+        print("📥 Recibido:", data, flush=True)
+        # siempre lista de entradas
+        entries = data if isinstance(data, list) else [data]
+        for entry in entries:
+            ts = datetime.now(timezone.utc)
+            session.execute(insert_cql, (
+                entry['user_id'],
+                str(entry['show_id']),
+                entry['action'],
+                ts
             ))
-    else:
-        session.execute(query, (
-            feedback_data['user_id'],
-            int(feedback_data['show_id']),
-            feedback_data['action'],
-            datetime.now(timezone.utc)
-        ))
+            print(f"💾 Guardado en Cassandra: {entry['user_id']} | {entry['show_id']} | {entry['action']} @ {ts.isoformat()}", flush=True)
+except Exception as e:
+    print(f"❌ Error inesperado en el consumer: {e}", flush=True)
+    raise
 
 
-    print("✅ Guardado en Cassandra.")

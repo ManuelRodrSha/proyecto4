@@ -1,0 +1,13 @@
+# Ignorar carpetas y archivos innecesarios para el build
+datasets/
+docs/
+src/
+hf_cache/
+*.ipynb
+*.pyc
+__pycache__/
+.vscode/
+.idea/
+logs_backup.txt
+verify_feedback.py
+*.mkv

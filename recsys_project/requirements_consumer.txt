@@ -1,0 +1,7 @@
+flask
+pandas
+numpy
+scikit-learn
+kafka-python==2.0.2
+cassandra-driver
+

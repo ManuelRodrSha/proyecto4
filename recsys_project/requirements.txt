@@ -1,7 +1,0 @@
-flask
-pandas
-numpy
-scikit-learn
-sentence-transformers
-kafka-python==2.0.2
-
