@@ -1,0 +1,8 @@
+flask
+pandas
+numpy
+scikit-learn
+sentence-transformers
+kafka-python
+cassandra-driver
+

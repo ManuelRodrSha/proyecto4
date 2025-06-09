@@ -1,0 +1,14 @@
+# Dockerfile.consumer
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Sólo las dependencias que necesita el consumer
+COPY requirements_consumer.txt .
+RUN pip install --no-cache-dir -r requirements_consumer.txt
+
+# Copiamos el código
+COPY . /app
+
+CMD ["python", "consumer.py"]
+
